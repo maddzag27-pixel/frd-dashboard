@@ -49,7 +49,7 @@ def get_raktar_adatok():
         return []
     
     try:
-        docs = db.collection('materials').stream()
+        docs = db.collection('materials').get()
         adatok = []
         for doc in docs:
             d = doc.to_dict()
