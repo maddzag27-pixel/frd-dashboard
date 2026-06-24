@@ -49,16 +49,19 @@ if db is not None:
 else:
     strl.error("X HIBA: A 'db' objektum None maradt!")
 
-# 2. Adatok letöltése a Firestore-ból (Gyorsítótárazva, hogy ne akadjon le a felhő)
-@strl.cache_data(ttl=10)  # 10 másodpercig megjegyzi az adatokat, utána frissít automatikusan
+# 2. Adatok letöltése a Firestore-ból (Felhőre optimalizált .get() verzió)
+@strl.cache_data(ttl=10)
 def get_raktar_adatok():
     if db is None:
+        strl.error("X HIBA: Nem lehet adatot letölteni, mert a 'db' kliens None!")
         return []
     
     try:
-        docs = db.collection('materials').get()
+        # Felhőben a .get() a legstabilabb, lekérjük a kollekció pillanatképét
+        docs_snapshot = db.collection('materials').get()
         adatok = []
-        for doc in docs:
+        
+        for doc in docs_snapshot:
             d = doc.to_dict()
             try:
                 current = float(d.get('currentStock', 0))
@@ -75,6 +78,7 @@ def get_raktar_adatok():
                 "Egység": d.get('unit', 'Pár'),
                 "Státusz": "🚨 HIÁNY" if current <= minimum else "✅ Rendben"
             })
+            
         return adatok
     except Exception as e:
         strl.error(f"X HIBA az adatok letöltése közben: {e}")
