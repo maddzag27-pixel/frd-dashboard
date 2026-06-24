@@ -42,32 +42,36 @@ if db is not None:
 else:
     strl.error("X HIBA: A 'db' objektum None maradt!")
 
-# 2. Adatok letöltése a Firestore-ból
+# 2. Adatok letöltése a Firestore-ból (Gyorsítótárazva, hogy ne akadjon le a felhő)
+@strl.cache_data(ttl=10)  # 10 másodpercig megjegyzi az adatokat, utána frissít automatikusan
 def get_raktar_adatok():
     if db is None:
         return []
     
-    docs = db.collection('materials').stream()
-    adatok = []
-    for doc in docs:
-        d = doc.to_dict()
-        # Biztonsági konverziók a tiszta megjelenítéshez
-        try:
-            current = float(d.get('currentStock', 0))
-            minimum = float(d.get('minStock', 20))
-        except:
-            current, minimum = 0.0, 20.0
+    try:
+        docs = db.collection('materials').stream()
+        adatok = []
+        for doc in docs:
+            d = doc.to_dict()
+            try:
+                current = float(d.get('currentStock', 0))
+                minimum = float(d.get('minStock', 20))
+            except:
+                current, minimum = 0.0, 20.0
 
-        adatok.append({
-            "Cikkszám (SKU)": d.get('sku', doc.id),
-            "Megnevezés": d.get('name', 'Névtelen alapanyag'),
-            "Kategória": d.get('type', 'Egyéb'),
-            "Készlet": int(current) if current % 1 == 0 else current,
-            "Minimum szint": int(minimum) if minimum % 1 == 0 else minimum,
-            "Egység": d.get('unit', 'Pár'),
-            "Státusz": "🚨 HIÁNY" if current <= minimum else "✅ Rendben"
-        })
-    return adatok
+            adatok.append({
+                "Cikkszám (SKU)": d.get('sku', doc.id),
+                "Megnevezés": d.get('name', 'Névtelen alapanyag'),
+                "Kategória": d.get('type', 'Egyéb'),
+                "Készlet": int(current) if current % 1 == 0 else current,
+                "Minimum szint": int(minimum) if minimum % 1 == 0 else minimum,
+                "Egység": d.get('unit', 'Pár'),
+                "Státusz": "🚨 HIÁNY" if current <= minimum else "✅ Rendben"
+            })
+        return adatok
+    except Exception as e:
+        strl.error(f"X HIBA az adatok letöltése közben: {e}")
+        return []
 
 # --- UI FELÉPÍTÉSE ---
 
