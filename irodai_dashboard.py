@@ -11,13 +11,13 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Felhő-kompatibilis HTTP REST kényszerítéssel)
+# 1. Firebase csatlakozás inicializálása (Tiszta, stabil verzió)
 @strl.cache_resource
 def init_firebase():
     strl.info("🔄 Firebase inicializálása folyamatban...")
     try:
         if "firebase" not in strl.secrets:
-            strl.error("X HIBA: A 'firebase' szekció hiányzik a Streamlit Secrets-ben!")
+            strl.error("X HIBA: A 'firebase' szekció hiányzik a Streamlit Secrets-ből!")
             return None
             
         key_dict = dict(strl.secrets["firebase"])
@@ -28,20 +28,12 @@ def init_firebase():
         cred = credentials.Certificate(key_dict)
         
         if not firebase_admin._apps:
-            firebase_admin.initialize_app(cred, {
-                'projectId': key_dict.get('project_id')
-            })
+            firebase_admin.initialize_app(cred)
             strl.success("✅ Firebase sikeresen inicializálva!")
         else:
             strl.success("✅ Firebase kapcsolat aktív.")
             
-        # KÉNYSZERÍTÉS: gRPC helyett sima HTTP protokoll használata a felhős hálózati akadályok ellen
-        from google.cloud import firestore_v1
-        return firestore_v1.Client(
-            project=key_dict.get('project_id'),
-            credentials=cred._credential,
-            client_options={"api_endpoint": "firestore.googleapis.com"}
-        )
+        return firestore.client()
     except Exception as e:
         strl.error(f"X BIZTONSÁGI HIBA: Hiba történt a kulcs feldolgozásakor! {e}")
         return None
