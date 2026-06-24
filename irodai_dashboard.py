@@ -11,28 +11,35 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Biztonságos felhős verzió - Nyomkövetéssel)
+# 1. Firebase csatlakozás inicializálása (Tiszta TOML alapú beolvasás)
 @strl.cache_resource
 def init_firebase():
-    import json
     strl.info("🔄 Firebase inicializálása folyamatban...")
     try:
-        if "firebase_key" not in strl.secrets:
-            strl.error("X HIBA: A 'firebase_key' nem található a Streamlit Secrets-ben!")
+        if "firebase" not in strl.secrets:
+            strl.error("X HIBA: A 'firebase' szekció hiányzik a Streamlit Secrets-ből!")
             return None
             
-        key_dict = json.loads(strl.secrets["firebase_key"], strict=False)
+        # A Streamlit automatikusan szótárrá alakítja a TOML formátumot
+        key_dict = dict(strl.secrets["firebase"])
+        
+        # Javítjuk a sortöréseket a privát kulcsban, ha a másolás elrontotta volna
+        if "private_key" in key_dict:
+            key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+            
         cred = credentials.Certificate(key_dict)
         
         if not firebase_admin._apps:
-            firebase_admin.initialize_app(cred)
-            strl.success("✅ Firebase sikeresen inicializálva először!")
+            firebase_admin.initialize_app(cred, {
+                'projectId': key_dict.get('project_id')
+            })
+            strl.success("✅ Firebase sikeresen inicializálva!")
         else:
-            strl.success("✅ Firebase kapcsolat már létezik, újrahasználat.")
+            strl.success("✅ Firebase kapcsolat aktív.")
             
-        return firestore.client()
+        return firestore.client(project=key_dict.get('project_id'))
     except Exception as e:
-        strl.error(f"X BIZTONSÁGI HIBA: A Firebase kulcs nem olvasható a Secrets-ből! {e}")
+        strl.error(f"X BIZTONSÁGI HIBA: Hiba történt a kulcs feldolgozásakor! {e}")
         return None
 
 db = init_firebase()
