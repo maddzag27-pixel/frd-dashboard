@@ -11,32 +11,20 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (csak egyszer fut le)
+# 1. Firebase csatlakozás inicializálása (Biztonságos felhős verzió)
 @strl.cache_resource
 def init_firebase():
-    # Megkeressük a mappában lévő JSON kulcsot automatikusan
-    import os
-    json_key = None
-    for fajl in os.listdir('.'):
-        if fajl.endswith('.json') and ('firebase' in fajl.lower() or 'key' in fajl.lower()):
-            json_key = fajl
-            break
-    
-    if not json_key:
-        # Ha nem találja meg automatikusan, a második eshetőség
-        for fajl in os.listdir('.'):
-            if fajl.endswith('.json') and fajl != 'package.json':
-                json_key = fajl
-                break
-                
-    if not json_key:
-        strl.error("X HIBA: Nem található a Firebase .json kulcsfájl ebben a mappában!")
+    import json
+    try:
+        # Kiolvassuk a kulcsot a Streamlit Secrets-ből
+        key_dict = json.loads(strl.secrets["firebase_key"])
+        cred = credentials.Certificate(key_dict)
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(cred)
+        return firestore.client()
+    except Exception as e:
+        strl.error(f"X BIOTZONSÁGI HIBA: A Firebase kulcs nem olvasható a Secrets-ből! {e}")
         return None
-
-    cred = credentials.Certificate(json_key)
-    if not firebase_admin._apps:
-        firebase_admin.initialize_app(cred)
-    return firestore.client()
 
 db = init_firebase()
 
