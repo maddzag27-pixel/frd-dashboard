@@ -11,26 +11,21 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Atombiztos Base64 verzió)
+# 1. Firebase csatlakozás inicializálása (Tiszta többsoros verzió)
 @strl.cache_resource
 def init_firebase():
-    import base64
     strl.info("🔄 Firebase inicializálása folyamatban...")
     try:
         if "p_key" not in strl.secrets:
-            strl.error("X HIBA: A 'p_key' hiányzik a Streamlit Secrets-ből!")
+            strl.error("X HIBA: A 'p_key' hiányzik a Streamlit Secrets-ben!")
             return None
             
-        # Visszafejtjük a Base64-es tiszta szöveget az eredeti formájára
-        encoded_key = strl.secrets["p_key"]
-        decoded_key = base64.b64decode(encoded_key).decode("utf-8")
-        
-        # Felépítjük a Google SDK által elvárt hitelesítési szótárat
+        # Felépítjük a Google SDK által elvárt hitelesítési szótárat közvetlenül a szövegből
         key_dict = {
             "type": "service_account",
             "project_id": "frd-alapanyag",
             "private_key_id": strl.secrets["p_id"],
-            "private_key": decoded_key.replace("\\n", "\n"),
+            "private_key": strl.secrets["p_key"],
             "client_email": "firebase-adminsdk-fbsvc@frd-alapanyag.iam.gserviceaccount.com",
             "client_id": "118377480036110848051",
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
