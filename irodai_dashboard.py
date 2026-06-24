@@ -37,7 +37,7 @@ def init_firebase():
         else:
             strl.success("✅ Firebase kapcsolat aktív.")
             
-        return firestore.client(project=key_dict.get('project_id'))
+        return firestore.client()
     except Exception as e:
         strl.error(f"X BIZTONSÁGI HIBA: Hiba történt a kulcs feldolgozásakor! {e}")
         return None
