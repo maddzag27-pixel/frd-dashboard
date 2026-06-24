@@ -11,22 +11,36 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Biztonságos felhős verzió - szigorú JSON fix)
+# 1. Firebase csatlakozás inicializálása (Biztonságos felhős verzió - Nyomkövetéssel)
 @strl.cache_resource
 def init_firebase():
     import json
+    strl.info("🔄 Firebase inicializálása folyamatban...")
     try:
-        # A 'strict=False' engedélyezi a rejtett vezérlőkaraktereket (pl. \n) a szövegen belül
+        if "firebase_key" not in strl.secrets:
+            strl.error("X HIBA: A 'firebase_key' nem található a Streamlit Secrets-ben!")
+            return None
+            
         key_dict = json.loads(strl.secrets["firebase_key"], strict=False)
         cred = credentials.Certificate(key_dict)
+        
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
+            strl.success("✅ Firebase sikeresen inicializálva először!")
+        else:
+            strl.success("✅ Firebase kapcsolat már létezik, újrahasználat.")
+            
         return firestore.client()
     except Exception as e:
         strl.error(f"X BIZTONSÁGI HIBA: A Firebase kulcs nem olvasható a Secrets-ből! {e}")
         return None
 
 db = init_firebase()
+
+if db is not None:
+    strl.success("⚡ Firestore kliens sikeresen létrejött!")
+else:
+    strl.error("X HIBA: A 'db' objektum None maradt!")
 
 # 2. Adatok letöltése a Firestore-ból
 def get_raktar_adatok():
