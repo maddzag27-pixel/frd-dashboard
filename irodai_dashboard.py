@@ -11,19 +11,17 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Tiszta TOML alapú beolvasás)
+# 1. Firebase csatlakozás inicializálása (Felhő-kompatibilis HTTP REST kényszerítéssel)
 @strl.cache_resource
 def init_firebase():
     strl.info("🔄 Firebase inicializálása folyamatban...")
     try:
         if "firebase" not in strl.secrets:
-            strl.error("X HIBA: A 'firebase' szekció hiányzik a Streamlit Secrets-ből!")
+            strl.error("X HIBA: A 'firebase' szekció hiányzik a Streamlit Secrets-ben!")
             return None
             
-        # A Streamlit automatikusan szótárrá alakítja a TOML formátumot
         key_dict = dict(strl.secrets["firebase"])
         
-        # Javítjuk a sortöréseket a privát kulcsban, ha a másolás elrontotta volna
         if "private_key" in key_dict:
             key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
             
@@ -37,7 +35,13 @@ def init_firebase():
         else:
             strl.success("✅ Firebase kapcsolat aktív.")
             
-        return firestore.client()
+        # KÉNYSZERÍTÉS: gRPC helyett sima HTTP protokoll használata a felhős hálózati akadályok ellen
+        from google.cloud import firestore_v1
+        return firestore_v1.Client(
+            project=key_dict.get('project_id'),
+            credentials=cred._credential,
+            client_options={"api_endpoint": "firestore.googleapis.com"}
+        )
     except Exception as e:
         strl.error(f"X BIZTONSÁGI HIBA: Hiba történt a kulcs feldolgozásakor! {e}")
         return None
