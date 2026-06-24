@@ -3,6 +3,8 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import pandas as pd
 from io import BytesIO
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
 # Oldal konfigurációja (szélesvásznú asztali nézet)
 strl.set_page_config(
@@ -39,14 +41,14 @@ def init_firebase():
             
         return firestore.client()
     except Exception as e:
-        # Csak akkor írunk ki hibát, ha valami tényleg végzetes baj van, de a sima infókat elrejtjük
         strl.error(f"X Rendszerhiba a kapcsolódáskor: {e}")
         return None
 
 db = init_firebase()
-if db is not None:
-    strl.success("⚡ Firestore kliens sikeresen létrejött!")
-else:
+
+# A zöld sikeres csatlakozás sávot itt teljesen töröltük a letisztult felület érdekében, 
+# csak a kritikus hibaüzenet maradt meg háttér-biztosítéknak.
+if db is None:
     strl.error("X HIBA: A 'db' objektum None maradt!")
 
 # 2. Adatok letöltése a Firestore-ból (Felhőre optimalizált .get() verzió)
@@ -57,7 +59,6 @@ def get_raktar_adatok():
         return []
     
     try:
-        # Felhőben a .get() a legstabilabb, lekérjük a kollekció pillanatképét
         docs_snapshot = db.collection('materials').get()
         adatok = []
         
@@ -84,6 +85,55 @@ def get_raktar_adatok():
         strl.error(f"X HIBA az adatok letöltése közben: {e}")
         return []
 
+# 3. Formázott Excel generálása színes fejléccel és automatikus oszlopszélességgel
+def generalk_formazott_excel(dataframe):
+    excel_buffer = BytesIO()
+    
+    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+        dataframe.to_excel(writer, index=False, sheet_name='Aktuális Készlet')
+        
+        workbook = writer.book
+        worksheet = writer.sheets['Aktuális Készlet']
+        
+        # Elegáns sötétkék háttér és félkövér fehér betűstílus a fejlécnek
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Fejléc formázása és sormagasság igazítása
+        for cell in worksheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+        worksheet.row_dimensions[1].height = 26
+        
+        # Automatikus oszlopszélesség kiszámítása a leghosszabb szövegek alapján
+        for col in worksheet.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            
+            for cell in col:
+                if cell.value is not None:
+                    val_str = str(cell.value)
+                    # Ha van benne sortörés, a leghosszabb sort vesszük alapul
+                    lines = val_str.split('\n')
+                    for line in lines:
+                        if len(line) > max_len:
+                            max_len = len(line)
+            
+            # 3 karakter biztonsági ráhagyás, de minimum 12 egység széles oszlopok
+            worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
+            
+            # Adatcellák finom balra/középre igazítása a jobb olvashatóságért
+            if col_letter in ['A', 'D', 'E', 'F', 'G']:  # Cikkszám, Készletek, Egység, Státusz mehet középre
+                for cell in col[1:]:
+                    cell.alignment = Alignment(horizontal="center")
+            else:
+                for cell in col[1:]:
+                    cell.alignment = Alignment(horizontal="left")
+                    
+    return excel_buffer.getvalue()
+
 # --- UI FELÉPÍTÉSE ---
 
 strl.title("📊 FRD Alapanyag Raktár - Vezetői Műszerfal")
@@ -91,7 +141,6 @@ strl.caption("Élő, irodai betekintő felület az üzemben lévő tabletek kés
 strl.write("---")
 
 if db is not None:
-    # Adatok frissítése gomb és adatok beolvasása
     nyers_adatok = get_raktar_adatok()
     df = pd.DataFrame(nyers_adatok)
 
@@ -111,15 +160,14 @@ if db is not None:
                 delta_color="inverse" if len(hianyzo_df) > 0 else "normal"
             )
         with col3:
-            # Excel export előkészítése a háttérben
-            buffer = BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='Aktuális Készlet')
-            
             strl.write("### Riport letöltése")
+            
+            # Dinamikus, formázott Excel fájl generálása gombnyomásra
+            excel_adatok = generalk_formazott_excel(df)
+            
             strl.download_button(
                 label="📥 Teljes készlet letöltése Excelben",
-                data=buffer.getvalue(),
+                data=excel_adatok,
                 file_name="frd_raktarkeszlet_riport.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
