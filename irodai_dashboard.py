@@ -11,19 +11,34 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Tiszta, stabil verzió)
+# 1. Firebase csatlakozás inicializálása (Atombiztos Base64 verzió)
 @strl.cache_resource
 def init_firebase():
+    import base64
     strl.info("🔄 Firebase inicializálása folyamatban...")
     try:
-        if "firebase" not in strl.secrets:
-            strl.error("X HIBA: A 'firebase' szekció hiányzik a Streamlit Secrets-ből!")
+        if "p_key" not in strl.secrets:
+            strl.error("X HIBA: A 'p_key' hiányzik a Streamlit Secrets-ből!")
             return None
             
-        key_dict = dict(strl.secrets["firebase"])
+        # Visszafejtjük a Base64-es tiszta szöveget az eredeti formájára
+        encoded_key = strl.secrets["p_key"]
+        decoded_key = base64.b64decode(encoded_key).decode("utf-8")
         
-        if "private_key" in key_dict:
-            key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+        # Felépítjük a Google SDK által elvárt hitelesítési szótárat
+        key_dict = {
+            "type": "service_account",
+            "project_id": "frd-alapanyag",
+            "private_key_id": strl.secrets["p_id"],
+            "private_key": decoded_key.replace("\\n", "\n"),
+            "client_email": "firebase-adminsdk-fbsvc@frd-alapanyag.iam.gserviceaccount.com",
+            "client_id": "118377480036110848051",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40frd-alapanyag.iam.gserviceaccount.com",
+            "universe_domain": "googleapis.com"
+        }
             
         cred = credentials.Certificate(key_dict)
         
