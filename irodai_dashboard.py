@@ -11,16 +11,13 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Tiszta többsoros verzió)
+# 1. Firebase csatlakozás inicializálása (Letisztított, üzenetek nélküli verzió)
 @strl.cache_resource
 def init_firebase():
-    strl.info("🔄 Firebase inicializálása folyamatban...")
     try:
         if "p_key" not in strl.secrets:
-            strl.error("X HIBA: A 'p_key' hiányzik a Streamlit Secrets-ben!")
             return None
             
-        # Felépítjük a Google SDK által elvárt hitelesítési szótárat közvetlenül a szövegből
         key_dict = {
             "type": "service_account",
             "project_id": "frd-alapanyag",
@@ -39,17 +36,14 @@ def init_firebase():
         
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
-            strl.success("✅ Firebase sikeresen inicializálva!")
-        else:
-            strl.success("✅ Firebase kapcsolat aktív.")
             
         return firestore.client()
     except Exception as e:
-        strl.error(f"X BIZTONSÁGI HIBA: Hiba történt a kulcs feldolgozásakor! {e}")
+        # Csak akkor írunk ki hibát, ha valami tényleg végzetes baj van, de a sima infókat elrejtjük
+        strl.error(f"X Rendszerhiba a kapcsolódáskor: {e}")
         return None
 
 db = init_firebase()
-
 if db is not None:
     strl.success("⚡ Firestore kliens sikeresen létrejött!")
 else:
