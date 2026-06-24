@@ -11,19 +11,19 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Biztonságos felhős verzió)
+# 1. Firebase csatlakozás inicializálása (Biztonságos felhős verzió - szigorú JSON fix)
 @strl.cache_resource
 def init_firebase():
     import json
     try:
-        # Kiolvassuk a kulcsot a Streamlit Secrets-ből
-        key_dict = json.loads(strl.secrets["firebase_key"])
+        # A 'strict=False' engedélyezi a rejtett vezérlőkaraktereket (pl. \n) a szövegen belül
+        key_dict = json.loads(strl.secrets["firebase_key"], strict=False)
         cred = credentials.Certificate(key_dict)
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
         return firestore.client()
     except Exception as e:
-        strl.error(f"X BIOTZONSÁGI HIBA: A Firebase kulcs nem olvasható a Secrets-ből! {e}")
+        strl.error(f"X BIZTONSÁGI HIBA: A Firebase kulcs nem olvasható a Secrets-ből! {e}")
         return None
 
 db = init_firebase()
