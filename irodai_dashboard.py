@@ -14,7 +14,7 @@ strl.set_page_config(
     layout="wide"
 )
 
-# 1. Firebase csatlakozás inicializálása (Letisztított, üzenetek nélküli verzió)
+# 1. Firebase csatlakozás inicializálása
 @strl.cache_resource
 def init_firebase():
     try:
@@ -36,7 +36,6 @@ def init_firebase():
         }
             
         cred = credentials.Certificate(key_dict)
-        
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
             
@@ -50,17 +49,14 @@ db = init_firebase()
 if db is None:
     strl.error("X HIBA: A 'db' objektum None maradt!")
 
-# 2. Adatok letöltése a Firestore-ból (Felhőre optimalizált .get() verzió)
+# 2. Adatok letöltése a Firestore-ból
 @strl.cache_data(ttl=10)
 def get_raktar_adatok():
     if db is None:
-        strl.error("X HIBA: Nem lehet adatot letölteni, mert a 'db' kliens None!")
         return []
-    
     try:
         docs_snapshot = db.collection('materials').get()
         adatok = []
-        
         for doc in docs_snapshot:
             d = doc.to_dict()
             try:
@@ -78,20 +74,17 @@ def get_raktar_adatok():
                 "Egység": d.get('unit', 'Pár'),
                 "Státusz": "🚨 HIÁNY" if current <= minimum else "✅ Rendben"
             })
-            
         return adatok
     except Exception as e:
         strl.error(f"X HIBA az adatok letöltése közben: {e}")
         return []
 
-# 3. ÚJ: Raktári naplófájlok (logs) lekérése adott napra vonatkozóan
+# 3. Raktári naplófájlok (logs) lekérése adott napra vonatkozóan
 @strl.cache_data(ttl=5)
 def get_napi_mozgasok(valasztott_datum):
     if db is None:
         return []
-    
     try:
-        # A választott nap kezdetének és végének beállítása (időzóna-független Firestore szűréshez)
         start_datetime = datetime.combine(valasztott_datum, time.min)
         end_datetime = datetime.combine(valasztott_datum, time.max)
         
@@ -123,7 +116,6 @@ def get_napi_mozgasok(valasztott_datum):
                 "Egység": d.get('unit', 'pár')
             })
             
-        # Időrendi sorrendbe rakjuk
         if mozgasok:
             mozgasok.sort(key=lambda x: x["Időpont"])
         return mozgasok
@@ -131,39 +123,43 @@ def get_napi_mozgasok(valasztott_datum):
         strl.error(f"X HIBA a naplózott adatok letöltése közben: {e}")
         return []
 
-# 4. Kétfüles, formázott Excel generálása (Készlet + Napi Mozgások)
+# 4. Kifinomult, különálló táblázatos Excel generáló automatikus oszlopszélességgel
 def generalk_formazott_excel(df_keszlet, df_mozgasok, datum_str):
     excel_buffer = BytesIO()
     
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        # 1. Fül: Aktuális Készlet
+        # 1. FÜL: Aktuális Készlet (Változatlanul a megszokott helyén)
         df_keszlet.to_excel(writer, index=False, sheet_name='Aktuális Készlet')
         
-        # 2. Fül: Napi Mozgások
-        if df_mozgasok.empty:
-            # Ha nincs mozgás, egy üres, de fejléces táblát mentünk el
-            üres_mozgas = pd.DataFrame(columns=["Időpont", "Cikkszám (SKU)", "Megnevezés", "Kategória", "Típus", "Mennyiség", "Egység"])
-            üres_mozgas.to_excel(writer, index=False, sheet_name=f'Mozgások {datum_str}')
-        else:
-            # Ha van adat, kategóriák szerint rendezve rakjuk bele az Excelbe
-            df_rendezett_mozgasok = df_mozgasok.sort_values(by=["Kategória", "Időpont"])
-            df_rendezett_mozgasok.to_excel(writer, index=False, sheet_name=f'Mozgások {datum_str}')
-            
+        # Oszlopszélességek és formázások követése a második fülhöz
         workbook = writer.book
+        sheet_name_mozgas = f'Mozgások {datum_str}'
         
-        # Stílusok meghatározása
-        header_fill_keszlet = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # Sötétkék
-        header_fill_mozgas = PatternFill(start_color="366092", end_color="366092", fill_type="solid")  # Világosabb acélkék
-        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        # Létrehozzuk manuálisan a második fület, hogy pontosan pozicionálhassuk a 3 táblázatot
+        ws2 = workbook.create_sheet(title=sheet_name_mozgas)
+        ws2.views.sheetView[0].showGridLines = True
         
-        # --- Formázás: 1. Fül ---
+        # Stílusok definíciója
+        font_main_title = Font(name="Calibri", size=14, bold=True, color="1F4E78")
+        font_section_title = Font(name="Calibri", size=12, bold=True, color="000000")
+        font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        font_italic_info = Font(name="Calibri", size=11, italic=True, color="595959")
+        
+        fill_keszlet_header = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # Sötétkék
+        fill_felhasznalas = PatternFill(start_color="2E5B82", end_color="2E5B82", fill_type="solid")   # Acélkék
+        fill_selejt = PatternFill(start_color="C55A11", end_color="C55A11", fill_type="solid")         # Tompa narancs/vörös
+        fill_atalakitas = PatternFill(start_color="548235", end_color="548235", fill_type="solid")     # Olívazöld
+        
+        align_center = Alignment(horizontal="center", vertical="center")
+        align_left = Alignment(horizontal="left", vertical="center")
+        
+        # --- 1. FÜL FORMÁZÁSA (Aktuális Készlet) ---
         ws1 = workbook['Aktuális Készlet']
         ws1.row_dimensions[1].height = 26
         for cell in ws1[1]:
-            cell.fill = header_fill_keszlet
-            cell.font = header_font
-            cell.alignment = header_alignment
+            cell.fill = fill_keszlet_header
+            cell.font = font_header
+            cell.alignment = align_center
             
         for col in ws1.columns:
             max_len = max(len(str(cell.value or '')) for cell in col)
@@ -174,23 +170,85 @@ def generalk_formazott_excel(df_keszlet, df_mozgasok, datum_str):
             else:
                 for cell in col[1:]: cell.alignment = Alignment(horizontal="left")
 
-        # --- Formázás: 2. Fül ---
-        ws2 = workbook[f'Mozgások {datum_str}']
-        ws2.row_dimensions[1].height = 26
-        for cell in ws2[1]:
-            cell.fill = header_fill_mozgas
-            cell.font = header_font
-            cell.alignment = header_alignment
+        # --- 2. FÜL MEGPÍTÉSE (3 Különálló táblázat egymás alatt) ---
+        # Főcím a lap tetejére
+        ws2['A1'] = f"NAPI RAKTÁRMOZGÁSI JELENTÉS ({datum_str})"
+        ws2['A1'].font = font_main_title
+        ws2.row_dimensions[1].height = 25
+        
+        current_row = 3
+        
+        # Segédfüggvény egy specifikus mozgástípus táblázatának legenerálásához
+        def beszuro_mozgas_tabla(szurt_df, szekcio_nev, fejlec_fill):
+            nonlocal current_row
             
-        for col in ws2.columns:
-            max_len = max(len(str(cell.value or '')) for cell in col)
-            col_letter = get_column_letter(col[0].column)
-            ws2.column_dimensions[col_letter].width = max(max_len + 3, 12)
-            if col_letter in ['A', 'B', 'E', 'F', 'G']:
-                for cell in col[1:]: cell.alignment = Alignment(horizontal="center")
-            else:
-                for cell in col[1:]: cell.alignment = Alignment(horizontal="left")
+            # Szekció címe
+            ws2.cell(row=current_row, column=1, value=szekcio_nev).font = font_section_title
+            ws2.row_dimensions[current_row].height = 20
+            current_row += 1
+            
+            headers = ["Időpont", "Cikkszám (SKU)", "Megnevezés", "Kategória", "Típus", "Mennyiség", "Egység"]
+            
+            # Fejlécek kiírása
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws2.cell(row=current_row, column=col_idx, value=header)
+                cell.font = font_header
+                cell.fill = fejlec_fill
+                cell.alignment = align_center
+            ws2.row_dimensions[current_row].height = 24
+            current_row += 1
+            
+            if szurt_df.empty:
+                cell = ws2.cell(row=current_row, column=1, value="Ezen a napon nem történt ilyen mozgás.")
+                cell.font = font_italic_info
+                ws2.row_dimensions[current_row].height = 18
+                current_row += 3 # Helyet hagyunk a következőnek
+                return
+            
+            # Adatsorok feltöltése
+            for _, row_data in szurt_df.iterrows():
+                for col_idx, header in enumerate(headers, 1):
+                    val = row_data[header]
+                    cell = ws2.cell(row=current_row, column=col_idx, value=val)
+                    
+                    # Igazítások típus szerint
+                    if header in ["Időpont", "Cikkszám (SKU)", "Típus", "Mennyiség", "Egység"]:
+                        cell.alignment = align_center
+                    else:
+                        cell.alignment = align_left
+                ws2.row_dimensions[current_row].height = 18
+                current_row += 1
                 
+            current_row += 2 # Biztonsági térköz a táblázatok között
+
+        # Előkészítjük a szűrt adathalmazokat
+        if not df_mozgasok.empty:
+            df_felhasznalas = df_mozgasok[df_mozgasok["Típus"] == "Felhasználás"].sort_values(by="Időpont")
+            df_selejt = df_mozgasok[df_mozgasok["Típus"] == "Selejt"].sort_values(by="Időpont")
+            df_atalakitas = df_mozgasok[df_mozgasok["Típus"].str.contains("Átalakítás")].sort_values(by="Időpont")
+        else:
+            df_felhasznalas = df_selejt = df_atalakitas = pd.DataFrame()
+
+        # A 3 táblázat egymás alá fűzése fixen meghatározott dizájnnal
+        beszuro_mozgas_tabla(df_felhasznalas, "1. Normál Anyagfelhasználások (Sima kiszedés)", fill_felhasznalas)
+        beszuro_mozgas_tabla(df_selejt, "2. Selejtre könyvelt tételek", fill_selejt)
+        beszuro_mozgas_tabla(df_atalakitas, "3. SBP-vé alakítások (Átmeneti mozgások)", fill_atalakitas)
+
+        # --- DINAMIKUS OSZLOPSZÉLESSÉG IGAZÍTÁS A 2. FÜLRE ---
+        # Végigmegyünk az oszlopokon és megkeressük az abszolút legszélesebb cellát (figyelembe véve a címeket is)
+        for col in ws2.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                if cell.value:
+                    # Ha a cella a főcím, azt nem számoljuk bele drasztikusan, mert torzítaná az A oszlopot
+                    if cell.coordinate == 'A1':
+                        continue
+                    val_str = str(cell.value)
+                    if len(val_str) > max_len:
+                        max_len = len(val_str)
+            ws2.column_dimensions[col_letter].width = max(max_len + 4, 14)
+
     return excel_buffer.getvalue()
 
 # --- UI FELÉPÍTÉSE ---
@@ -204,12 +262,10 @@ if db is not None:
     df = pd.DataFrame(nyers_adatok)
 
     if not df.empty:
-        # Készlethiányos termékek kiszűrése
         hianyzo_df = df[df["Státusz"] == "🚨 HIÁNY"]
         
-        # --- DÁTUMVÁLASZTÓ ÉS EXCEL GENERÁLÁS ---
+        # --- MUTATÓK ÉS NAPTÁR ---
         col1, col2, col3 = strl.columns([1, 1, 1])
-        
         with col1:
             strl.metric(label="Összes egyedi alapanyag", value=len(df))
         with col2:
@@ -220,46 +276,39 @@ if db is not None:
                 delta_color="inverse" if len(hianyzo_df) > 0 else "normal"
             )
         with col3:
-            # Dátumválasztó beillesztése (alapértelmezetten a mai nap)
             ma = datetime.now().date()
             valasztott_datum = strl.date_input("Válaszd ki a riport napját:", ma)
             datum_str = valasztott_datum.strftime('%Y-%m-%d')
 
         strl.write("---")
         
-        # Lekérjük a naplózott mozgásokat a kiválasztott napra
         nyers_mozgasok = get_napi_mozgasok(valasztott_datum)
         df_mozgasok = pd.DataFrame(nyers_mozgasok)
 
-        # --- NAPI JELENTÉS / KOMBINÁLT RIORT PANEL ---
-        strl.subheader(f"📈 Raktári Mozgások és Riport Letöltés: {datum_str}")
+        # --- NAPI JELENTÉS PANEL ---
+        strl.subheader(f"📈 Raktári Mozgások és Strukturált Riport Letöltés: {datum_str}")
         
         rep_col1, rep_col2 = strl.columns([2, 1])
-        
         with rep_col1:
             if not df_mozgasok.empty:
-                # Gyors összesítés a menedzsmentnek kategória és típus alapján
-                szumma = df_mozgasok.groupby(["Kategória", "Típus"])["Mennyiség"].count().reset_index(name="Események száma")
-                strl.write(f"**Napi aktivitás összesítve:** {len(df_mozgasok)} könyvelt tranzakció történt a mai napon.")
+                strl.write(f"**Napi aktivitás összesítve:** {len(df_mozgasok)} tranzakció történt. Az Excelben ezek most már különálló táblázatokba rendezve jelennek meg!")
             else:
-                strl.info(f"A választott napon ({datum_str}) még nem történt anyagkiadás vagy selejtezés az üzemben.")
+                strl.info(f"A választott napon ({datum_str}) még nem történt mozgás az üzemben.")
         
         with rep_col2:
-            # Kombinált Excel letöltése
             excel_adatok = generalk_formazott_excel(df, df_mozgasok, datum_str)
             strl.download_button(
-                label=f"📥 Összetett Excel Riport Letöltése ({datum_str})",
+                label=f"📥 Háromtáblázatos Excel Riport Letöltése",
                 data=excel_adatok,
                 file_name=f"frd_raktar_riport_{datum_str}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
 
-        # Ha vannak mozgások, vizuálisan is kirakjuk kategória szerint rendezhetően
+        # Élő képernyős betekintő
         if not df_mozgasok.empty:
-            with strl.expander(f"👀 Részletes napi mozgáslista megtekintése ({datum_str})", expanded=True):
-                # Kiválasztható szűrő kifejezetten a mozgástípusra (Felhasználás vs Selejt)
-                mozgas_szuro = strl.multiselect("Szűrés mozgástípus szerint:", list(df_mozgasok["Típus"].unique()), default=list(df_mozgasok["Típus"].unique()))
+            with strl.expander(f"👀 Részletes képernyős mozgáslista megtekintése ({datum_str})", expanded=True):
+                mozgas_szuro = strl.multiselect("Szűrés típus szerint a képernyőn:", list(df_mozgasok["Típus"].unique()), default=list(df_mozgasok["Típus"].unique()))
                 megjelenitendo_mozgas_df = df_mozgasok[df_mozgasok["Típus"].isin(mozgas_szuro)]
                 strl.dataframe(megjelenitendo_mozgas_df, use_container_width=True, hide_index=True)
 
@@ -282,7 +331,6 @@ if db is not None:
         with f_col2:
             kereses = strl.text_input("Keresés név vagy cikkszám alapján:", "").strip().lower()
 
-        # Szűrések alkalmazása a törzsadatra
         megjelenitendo_df = df.copy()
         if valasztott_kat != "Mind":
             megjelenitendo_df = megjelenitendo_df[megjelenitendo_df["Kategória"] == valasztott_kat]
@@ -292,7 +340,6 @@ if db is not None:
                 megjelenitendo_df["Cikkszám (SKU)"].str.lower().str.contains(kereses)
             ]
 
-        # --- A NAGY TÁBLÁZAT ---
         strl.dataframe(megjelenitendo_df, use_container_width=True, hide_index=True)
         
     else:
