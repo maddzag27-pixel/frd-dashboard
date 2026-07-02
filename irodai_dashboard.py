@@ -2,6 +2,7 @@ import streamlit as strl
 import firebase_admin
 from firebase_admin import credentials, firestore
 import pandas as pd
+from datetime import datetime, time
 from io import BytesIO
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -46,8 +47,6 @@ def init_firebase():
 
 db = init_firebase()
 
-# A zöld sikeres csatlakozás sávot itt teljesen töröltük a letisztult felület érdekében, 
-# csak a kritikus hibaüzenet maradt meg háttér-biztosítéknak.
 if db is None:
     strl.error("X HIBA: A 'db' objektum None maradt!")
 
@@ -85,59 +84,119 @@ def get_raktar_adatok():
         strl.error(f"X HIBA az adatok letöltése közben: {e}")
         return []
 
-# 3. Formázott Excel generálása színes fejléccel és automatikus oszlopszélességgel
-def generalk_formazott_excel(dataframe):
+# 3. ÚJ: Raktári naplófájlok (logs) lekérése adott napra vonatkozóan
+@strl.cache_data(ttl=5)
+def get_napi_mozgasok(valasztott_datum):
+    if db is None:
+        return []
+    
+    try:
+        # A választott nap kezdetének és végének beállítása (időzóna-független Firestore szűréshez)
+        start_datetime = datetime.combine(valasztott_datum, time.min)
+        end_datetime = datetime.combine(valasztott_datum, time.max)
+        
+        logs_snapshot = db.collection('logs')\
+            .where('timestamp', '>=', start_datetime)\
+            .where('timestamp', '<=', end_datetime)\
+            .get()
+            
+        mozgasok = []
+        tipus_leforditott = {
+            "felhasznalas": "Felhasználás",
+            "selejt": "Selejt",
+            "atgolyositas_ki": "Átalakítás (Kiadás)",
+            "atgolyositas_be": "Átalakítás (Beérkezés)"
+        }
+        
+        for doc in logs_snapshot:
+            d = doc.to_dict()
+            nyers_tipus = d.get('logType', 'felhasznalas')
+            mennyiseg = float(d.get('quantity', 0))
+            
+            mozgasok.append({
+                "Időpont": d.get('timestamp').strftime('%H:%M:%S') if d.get('timestamp') else '-',
+                "Cikkszám (SKU)": d.get('sku', '-'),
+                "Megnevezés": d.get('name', 'Névtelen'),
+                "Kategória": d.get('type', 'Egyéb'),
+                "Típus": tipus_leforditott.get(nyers_tipus, nyers_tipus),
+                "Mennyiség": int(mennyiseg) if mennyiseg % 1 == 0 else mennyiseg,
+                "Egység": d.get('unit', 'pár')
+            })
+            
+        # Időrendi sorrendbe rakjuk
+        if mozgasok:
+            mozgasok.sort(key=lambda x: x["Időpont"])
+        return mozgasok
+    except Exception as e:
+        strl.error(f"X HIBA a naplózott adatok letöltése közben: {e}")
+        return []
+
+# 4. Kétfüles, formázott Excel generálása (Készlet + Napi Mozgások)
+def generalk_formazott_excel(df_keszlet, df_mozgasok, datum_str):
     excel_buffer = BytesIO()
     
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        dataframe.to_excel(writer, index=False, sheet_name='Aktuális Készlet')
+        # 1. Fül: Aktuális Készlet
+        df_keszlet.to_excel(writer, index=False, sheet_name='Aktuális Készlet')
         
+        # 2. Fül: Napi Mozgások
+        if df_mozgasok.empty:
+            # Ha nincs mozgás, egy üres, de fejléces táblát mentünk el
+            üres_mozgas = pd.DataFrame(columns=["Időpont", "Cikkszám (SKU)", "Megnevezés", "Kategória", "Típus", "Mennyiség", "Egység"])
+            üres_mozgas.to_excel(writer, index=False, sheet_name=f'Mozgások {datum_str}')
+        else:
+            # Ha van adat, kategóriák szerint rendezve rakjuk bele az Excelbe
+            df_rendezett_mozgasok = df_mozgasok.sort_values(by=["Kategória", "Időpont"])
+            df_rendezett_mozgasok.to_excel(writer, index=False, sheet_name=f'Mozgások {datum_str}')
+            
         workbook = writer.book
-        worksheet = writer.sheets['Aktuális Készlet']
         
-        # Elegáns sötétkék háttér és félkövér fehér betűstílus a fejlécnek
-        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        # Stílusok meghatározása
+        header_fill_keszlet = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # Sötétkék
+        header_fill_mozgas = PatternFill(start_color="366092", end_color="366092", fill_type="solid")  # Világosabb acélkék
         header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
         header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         
-        # Fejléc formázása és sormagasság igazítása
-        for cell in worksheet[1]:
-            cell.fill = header_fill
+        # --- Formázás: 1. Fül ---
+        ws1 = workbook['Aktuális Készlet']
+        ws1.row_dimensions[1].height = 26
+        for cell in ws1[1]:
+            cell.fill = header_fill_keszlet
             cell.font = header_font
             cell.alignment = header_alignment
-        worksheet.row_dimensions[1].height = 26
-        
-        # Automatikus oszlopszélesség kiszámítása a leghosszabb szövegek alapján
-        for col in worksheet.columns:
-            max_len = 0
+            
+        for col in ws1.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
             col_letter = get_column_letter(col[0].column)
-            
-            for cell in col:
-                if cell.value is not None:
-                    val_str = str(cell.value)
-                    # Ha van benne sortörés, a leghosszabb sort vesszük alapul
-                    lines = val_str.split('\n')
-                    for line in lines:
-                        if len(line) > max_len:
-                            max_len = len(line)
-            
-            # 3 karakter biztonsági ráhagyás, de minimum 12 egység széles oszlopok
-            worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
-            
-            # Adatcellák finom balra/középre igazítása a jobb olvashatóságért
-            if col_letter in ['A', 'D', 'E', 'F', 'G']:  # Cikkszám, Készletek, Egység, Státusz mehet középre
-                for cell in col[1:]:
-                    cell.alignment = Alignment(horizontal="center")
+            ws1.column_dimensions[col_letter].width = max(max_len + 3, 12)
+            if col_letter in ['A', 'D', 'E', 'F', 'G']:
+                for cell in col[1:]: cell.alignment = Alignment(horizontal="center")
             else:
-                for cell in col[1:]:
-                    cell.alignment = Alignment(horizontal="left")
-                    
+                for cell in col[1:]: cell.alignment = Alignment(horizontal="left")
+
+        # --- Formázás: 2. Fül ---
+        ws2 = workbook[f'Mozgások {datum_str}']
+        ws2.row_dimensions[1].height = 26
+        for cell in ws2[1]:
+            cell.fill = header_fill_mozgas
+            cell.font = header_font
+            cell.alignment = header_alignment
+            
+        for col in ws2.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws2.column_dimensions[col_letter].width = max(max_len + 3, 12)
+            if col_letter in ['A', 'B', 'E', 'F', 'G']:
+                for cell in col[1:]: cell.alignment = Alignment(horizontal="center")
+            else:
+                for cell in col[1:]: cell.alignment = Alignment(horizontal="left")
+                
     return excel_buffer.getvalue()
 
 # --- UI FELÉPÍTÉSE ---
 
 strl.title("📊 FRD Alapanyag Raktár - Vezetői Műszerfal")
-strl.caption("Élő, irodai betekintő felület az üzemben lévő tabletek készletéhez")
+strl.caption("Élő, irodai betekintő felület az üzemben lévő tabletek készletéhez és napi naplózásához")
 strl.write("---")
 
 if db is not None:
@@ -148,8 +207,9 @@ if db is not None:
         # Készlethiányos termékek kiszűrése
         hianyzo_df = df[df["Státusz"] == "🚨 HIÁNY"]
         
-        # --- VEZETŐI MUTATÓK (METRICS) ---
-        col1, col2, col3 = strl.columns(3)
+        # --- DÁTUMVÁLASZTÓ ÉS EXCEL GENERÁLÁS ---
+        col1, col2, col3 = strl.columns([1, 1, 1])
+        
         with col1:
             strl.metric(label="Összes egyedi alapanyag", value=len(df))
         with col2:
@@ -160,17 +220,48 @@ if db is not None:
                 delta_color="inverse" if len(hianyzo_df) > 0 else "normal"
             )
         with col3:
-            strl.write("### Riport letöltése")
-            
-            # Dinamikus, formázott Excel fájl generálása gombnyomásra
-            excel_adatok = generalk_formazott_excel(df)
-            
+            # Dátumválasztó beillesztése (alapértelmezetten a mai nap)
+            ma = datetime.now().date()
+            valasztott_datum = strl.date_input("Válaszd ki a riport napját:", ma)
+            datum_str = valasztott_datum.strftime('%Y-%m-%d')
+
+        strl.write("---")
+        
+        # Lekérjük a naplózott mozgásokat a kiválasztott napra
+        nyers_mozgasok = get_napi_mozgasok(valasztott_datum)
+        df_mozgasok = pd.DataFrame(nyers_mozgasok)
+
+        # --- NAPI JELENTÉS / KOMBINÁLT RIORT PANEL ---
+        strl.subheader(f"📈 Raktári Mozgások és Riport Letöltés: {datum_str}")
+        
+        rep_col1, rep_col2 = strl.columns([2, 1])
+        
+        with rep_col1:
+            if not df_mozgasok.empty:
+                # Gyors összesítés a menedzsmentnek kategória és típus alapján
+                szumma = df_mozgasok.groupby(["Kategória", "Típus"])["Mennyiség"].count().reset_index(name="Események száma")
+                strl.write(f"**Napi aktivitás összesítve:** {len(df_mozgasok)} könyvelt tranzakció történt a mai napon.")
+            else:
+                strl.info(f"A választott napon ({datum_str}) még nem történt anyagkiadás vagy selejtezés az üzemben.")
+        
+        with rep_col2:
+            # Kombinált Excel letöltése
+            excel_adatok = generalk_formazott_excel(df, df_mozgasok, datum_str)
             strl.download_button(
-                label="📥 Teljes készlet letöltése Excelben",
+                label=f"📥 Összetett Excel Riport Letöltése ({datum_str})",
                 data=excel_adatok,
-                file_name="frd_raktarkeszlet_riport.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                file_name=f"frd_raktar_riport_{datum_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
             )
+
+        # Ha vannak mozgások, vizuálisan is kirakjuk kategória szerint rendezhetően
+        if not df_mozgasok.empty:
+            with strl.expander(f"👀 Részletes napi mozgáslista megtekintése ({datum_str})", expanded=True):
+                # Kiválasztható szűrő kifejezetten a mozgástípusra (Felhasználás vs Selejt)
+                mozgas_szuro = strl.multiselect("Szűrés mozgástípus szerint:", list(df_mozgasok["Típus"].unique()), default=list(df_mozgasok["Típus"].unique()))
+                megjelenitendo_mozgas_df = df_mozgasok[df_mozgasok["Típus"].isin(mozgas_szuro)]
+                strl.dataframe(megjelenitendo_mozgas_df, use_container_width=True, hide_index=True)
 
         strl.write("---")
 
@@ -181,7 +272,7 @@ if db is not None:
             strl.write("---")
 
         # --- SZŰRŐK AZ ASZTALI TÁBLÁZATHOZ ---
-        strl.subheader("🔍 Keresés és szűrés a teljes raktárban")
+        strl.subheader("🔍 Keresés és szűrés a teljes aktuális raktárban")
         f_col1, f_col2 = strl.columns([1, 2])
         
         with f_col1:
@@ -191,7 +282,7 @@ if db is not None:
         with f_col2:
             kereses = strl.text_input("Keresés név vagy cikkszám alapján:", "").strip().lower()
 
-        # Szűrések alkalmazása
+        # Szűrések alkalmazása a törzsadatra
         megjelenitendo_df = df.copy()
         if valasztott_kat != "Mind":
             megjelenitendo_df = megjelenitendo_df[megjelenitendo_df["Kategória"] == valasztott_kat]
