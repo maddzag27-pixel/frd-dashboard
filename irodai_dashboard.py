@@ -2,7 +2,7 @@ import streamlit as strl
 import firebase_admin
 from firebase_admin import credentials, firestore
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from io import BytesIO
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -46,9 +46,6 @@ def init_firebase():
 
 db = init_firebase()
 
-if db is None:
-    strl.error("X HIBA: A 'db' objektum None maradt!")
-
 # 2. Adatok letöltése a Firestore-ból
 @strl.cache_data(ttl=10)
 def get_raktar_adatok():
@@ -79,14 +76,14 @@ def get_raktar_adatok():
         strl.error(f"X HIBA az adatok letöltése közben: {e}")
         return []
 
-# 3. Raktári naplófájlok (logs) lekérése – tisztítva, időbélyeg nélkül
+# 3. Raktári naplófájlok (logs) lekérése – Dátumintervallum alapú szűréssel
 @strl.cache_data(ttl=5)
-def get_napi_mozgasok(valasztott_datum):
+def get_idoszakos_mozgasok(start_date, end_date):
     if db is None:
         return []
     try:
-        start_datetime = datetime.combine(valasztott_datum, time.min)
-        end_datetime = datetime.combine(valasztott_datum, time.max)
+        start_datetime = datetime.combine(start_date, time.min)
+        end_datetime = datetime.combine(end_date, time.max)
         
         logs_snapshot = db.collection('logs')\
             .where('timestamp', '>=', start_datetime)\
@@ -120,15 +117,15 @@ def get_napi_mozgasok(valasztott_datum):
         strl.error(f"X HIBA a naplózott adatok letöltése közben: {e}")
         return []
 
-# 4. Excel generáló – időpont oszlop nélkül, letisztított fejlécekkel
-def generalk_formazott_excel(df_keszlet, df_mozgasok, datum_str):
+# 4. Kifinomult Excel generáló – Időszaki összesítéssel és intelligens formázással
+def generalk_idoszakos_excel(df_keszlet, df_mozgasok, idoszak_str):
     excel_buffer = BytesIO()
     
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
         df_keszlet.to_excel(writer, index=False, sheet_name='Aktuális Készlet')
         
         workbook = writer.book
-        sheet_name_mozgas = f'Mozgások {datum_str}'
+        sheet_name_mozgas = 'Időszaki Mozgások'
         ws2 = workbook.create_sheet(title=sheet_name_mozgas)
         ws2.views.sheetView[0].showGridLines = True
         
@@ -163,22 +160,21 @@ def generalk_formazott_excel(df_keszlet, df_mozgasok, datum_str):
             else:
                 for cell in col[1:]: cell.alignment = Alignment(horizontal="left")
 
-        # --- 2. FÜL FORMÁZÁSA (Időpont nélkül) ---
-        ws2['A1'] = f"NAPI RAKTÁRMOZGÁSI JELENTÉS ({datum_str})"
+        # --- 2. FÜL FORMÁZÁSA ---
+        ws2['A1'] = f"IDŐSZAKOS RAKTÁRMOZGÁSI ÖSSZESÍTŐ ({idoszak_str})"
         ws2['A1'].font = font_main_title
         ws2.row_dimensions[1].height = 25
         
         current_row = 3
         
-        def beszuro_mozgas_tabla(szurt_df, szekcio_nev, fejlec_fill):
+        def beszuro_osszesitett_tabla(szurt_df, szekcio_nev, fejlec_fill):
             nonlocal current_row
             
             ws2.cell(row=current_row, column=1, value=szekcio_nev).font = font_section_title
             ws2.row_dimensions[current_row].height = 20
             current_row += 1
             
-            # Letisztított fejléclista
-            headers = ["Cikkszám (SKU)", "Megnevezés", "Kategória", "Típus", "Mennyiség", "Egység"]
+            headers = ["Cikkszám (SKU)", "Megnevezés", "Kategória", "Típus", "Összesített Mennyiség", "Egység"]
             
             for col_idx, header in enumerate(headers, 1):
                 cell = ws2.cell(row=current_row, column=col_idx, value=header)
@@ -189,18 +185,30 @@ def generalk_formazott_excel(df_keszlet, df_mozgasok, datum_str):
             current_row += 1
             
             if szurt_df.empty:
-                cell = ws2.cell(row=current_row, column=1, value="Ezen a napon nem történt ilyen mozgás.")
+                cell = ws2.cell(row=current_row, column=1, value="A megadott időszakban nem történt ilyen mozgás.")
                 cell.font = font_italic_info
                 ws2.row_dimensions[current_row].height = 18
                 current_row += 3
                 return
             
-            for _, row_data in szurt_df.iterrows():
-                for col_idx, header in enumerate(headers, 1):
-                    val = row_data[header]
+            # ÖSSZESÍTÉS LOGIKÁJA: Cikkszám szerint összeadjuk a mennyiségeket az időszakra
+            grouped = szurt_df.groupby(["Cikkszám (SKU)", "Megnevezés", "Kategória", "Típus", "Egység"])["Mennyiség"].sum().reset_index()
+            # Sorrend: kategória és mennyiség szerint csökkenőben (hogy a legtöbbet használt legyen elöl)
+            grouped = grouped.sort_values(by=["Kategória", "Mennyiség"], ascending=[True, False])
+            
+            for _, row_data in grouped.iterrows():
+                row_values = [
+                    row_data["Cikkszám (SKU)"],
+                    row_data["Megnevezés"],
+                    row_data["Kategória"],
+                    row_data["Típus"],
+                    row_data["Mennyiség"],
+                    row_data["Egység"]
+                ]
+                for col_idx, val in enumerate(row_values, 1):
                     cell = ws2.cell(row=current_row, column=col_idx, value=val)
-                    
-                    if header in ["Cikkszám (SKU)", "Típus", "Mennyiség", "Egység"]:
+                    header_name = headers[col_idx - 1]
+                    if header_name in ["Cikkszám (SKU)", "Típus", "Összesített Mennyiség", "Egység"]:
                         cell.alignment = align_center
                     else:
                         cell.alignment = align_left
@@ -216,11 +224,10 @@ def generalk_formazott_excel(df_keszlet, df_mozgasok, datum_str):
         else:
             df_felhasznalas = df_selejt = df_atalakitas = pd.DataFrame()
 
-        beszuro_mozgas_tabla(df_felhasznalas, "1. Normál Anyagfelhasználások (Sima kiszedés)", fill_felhasznalas)
-        beszuro_mozgas_tabla(df_selejt, "2. Selejtre könyvelt tételek", fill_selejt)
-        beszuro_mozgas_tabla(df_atalakitas, "3. SBP-vé alakítások", fill_atalakitas)
+        beszuro_osszesitett_tabla(df_felhasznalas, "1. Időszaki Összesített Felhasználások (Legtöbbet fogyott tételek elöl)", fill_felhasznalas)
+        beszuro_osszesitett_tabla(df_selejt, "2. Időszaki Összesített Selejtek (Kritikus veszteségek követése)", fill_selejt)
+        beszuro_osszesitett_tabla(df_atalakitas, "3. Időszaki Összesített Átalakítások", fill_atalakitas)
 
-        # Oszlopszélességek automatikus igazítása
         for col in ws2.columns:
             max_len = 0
             col_letter = get_column_letter(col[0].column)
@@ -235,7 +242,7 @@ def generalk_formazott_excel(df_keszlet, df_mozgasok, datum_str):
 
 # --- UI FELÉPÍTÉSE ---
 strl.title("📊 FRD Alapanyag Raktár - Vezetői Műszerfal")
-strl.caption("Élő, irodai betekintő felület az üzemben lévő tabletek készletéhez és napi naplózásához")
+strl.caption("Élő, irodai betekintő felület az üzemben lévő tabletek készletéhez és időszaki jelentésekhez")
 strl.write("---")
 
 if db is not None:
@@ -256,38 +263,68 @@ if db is not None:
                 delta_color="inverse" if len(hianyzo_df) > 0 else "normal"
             )
         with col3:
+            # ÚJ: Időszak típus kiválasztása a menedzsmentnek
             ma = datetime.now().date()
-            valasztott_datum = strl.date_input("Válaszd ki a riport napját:", ma)
-            datum_str = valasztott_datum.strftime('%Y-%m-%d')
+            idoszak_tipus = strl.selectbox(
+                "Válaszd ki az elemzési időszakot:",
+                ["Egy konkrét nap", "Utolsó 30 nap (1 hónap)", "Utolsó 90 nap (Negyedév)", "Utolsó 180 nap (Fél év)"]
+            )
+            
+            # Dátumok kiszámítása a háttérben
+            if idoszak_tipus == "Egy konkrét nap":
+                valasztott_datum = strl.date_input("Válaszd ki a napot:", ma)
+                start_date = end_date = valasztott_datum
+                idoszak_str = start_date.strftime('%Y-%m-%d')
+            elif idoszak_tipus == "Utolsó 30 nap (1 hónap)":
+                start_date = ma - timedelta(days=30)
+                end_date = ma
+                idoszak_str = f"{start_date.strftime('%Y-%m-%d')} - től {end_date.strftime('%Y-%m-%d')}-ig"
+            elif idoszak_tipus == "Utolsó 90 nap (Negyedév)":
+                start_date = ma - timedelta(days=90)
+                end_date = ma
+                idoszak_str = f"{start_date.strftime('%Y-%m-%d')} - től {end_date.strftime('%Y-%m-%d')}-ig"
+            else:  # Fél év
+                start_date = ma - timedelta(days=180)
+                end_date = ma
+                idoszak_str = f"{start_date.strftime('%Y-%m-%d')} - től {end_date.strftime('%Y-%m-%d')}-ig"
 
         strl.write("---")
         
-        nyers_mozgasok = get_napi_mozgasok(valasztott_datum)
+        # Lekérjük az adatokat a kalkulált intervallumra
+        nyers_mozgasok = get_idoszakos_mozgasok(start_date, end_date)
         df_mozgasok = pd.DataFrame(nyers_mozgasok)
 
-        strl.subheader(f"📈 Raktári Mozgások és Strukturált Riport Letöltés: {datum_str}")
+        strl.subheader(f"📈 Kiválasztott időszak adatai: {idoszak_tipus}")
+        strl.info(f"Aktív szűrési tartomány: **{idoszak_str}**")
         
         rep_col1, rep_col2 = strl.columns([2, 1])
         with rep_col1:
             if not df_mozgasok.empty:
-                strl.write(f"**Napi aktivitás összesítve:** {len(df_mozgasok)} tranzakció történt a mai napon, kategóriákra bontva.")
+                strl.write(f"A kijelölt időszakban összesen **{len(df_mozgasok)} nyers tranzakció** történt az üzemben. Az Excel letöltéskor ezeket automatikusan alkatrészenként összesítve kapod meg!")
             else:
-                strl.info(f"A választott napon ({datum_str}) nem történt mozgás az üzemben.")
+                strl.info("A kijelölt időintervallumban nem található rögzített mozgás az adatbázisban.")
         
         with rep_col2:
-            excel_adatok = generalk_formazott_excel(df, df_mozgasok, datum_str)
+            excel_adatok = generalk_idoszakos_excel(df, df_mozgasok, idoszak_str)
             strl.download_button(
-                label=f"📥 Háromtáblázatos Excel Riport Letöltése",
+                label=f"📥 Időszaki Összesített Excel Letöltése",
                 data=excel_adatok,
-                file_name=f"frd_raktar_riport_{datum_str}.xlsx",
+                file_name=f"frd_raktar_osszesito_{ma.strftime('%Y-%m-%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
 
+        # Képernyős betekintő (Ha hosszabb időszak van kijelölve, itt is összesítve mutatjuk meg, hogy átlátható legyen)
         if not df_mozgasok.empty:
-            with strl.expander(f"👀 Részletes képernyős mozgáslista megtekintése ({datum_str})", expanded=True):
-                mozgas_szuro = strl.multiselect("Szűrés típus szerint a képernyőn:", list(df_mozgasok["Típus"].unique()), default=list(df_mozgasok["Típus"].unique()))
-                megjelenitendo_mozgas_df = df_mozgasok[df_mozgasok["Típus"].isin(mozgas_szuro)]
+            with strl.expander("👀 Összesített adatok gyors megtekintése a képernyőn", expanded=True):
+                kepernyos_szumma = df_mozgasok.groupby(["Cikkszám (SKU)", "Megnevezés", "Kategória", "Típus", "Egység"])["Mennyiség"].sum().reset_index()
+                kepernyos_szumma = kepernyos_szumma.sort_values(by=["Típus", "Kategória", "Mennyiség"], ascending=[True, True, False])
+                
+                mozgas_szuro = strl.multiselect("Szűrés típus szerint a képernyőn:", list(kepernyos_szumma["Típus"].unique()), default=list(kepernyos_szumma["Típus"].unique()))
+                megjelenitendo_mozgas_df = kepernyos_szumma[kepernyos_szumma["Típus"].isin(mozgas_szuro)]
+                
+                # Átnevezzük az oszlopot a képernyőn is a tisztaság kedvéért
+                megjelenitendo_mozgas_df = megjelenitendo_mozgas_df.rename(columns={"Mennyiség": "Időszaki Összes Mennyiség"})
                 strl.dataframe(megjelenitendo_mozgas_df, use_container_width=True, hide_index=True)
 
         strl.write("---")
